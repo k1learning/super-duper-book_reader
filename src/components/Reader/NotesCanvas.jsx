@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Type, Pen, Eraser2, Trash2 } from 'lucide-react';
+import { Type, Pen, Eraser, Trash2 } from 'lucide-react';
 import { getCanvasNotes, saveCanvasNotes } from '../../db';
 
 const CANVAS_WIDTH = 800;

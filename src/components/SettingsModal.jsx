@@ -76,7 +76,6 @@ const SettingsModal = ({ onClose }) => {
                     padding: '15px',
                     backgroundColor: 'var(--color-accent)', // Orange
                     color: '#fff',
-                    border: '1px solid #000', // Slight border as seen in some brutalist designs or just matching theme
                     border: 'none',
                     fontSize: '16px',
                     fontWeight: 'bold',
