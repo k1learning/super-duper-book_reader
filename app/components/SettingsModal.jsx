@@ -7,8 +7,6 @@ const SettingsModal = ({ onClose }) => {
     const menuItems = [
         "App Language",
         "Notification",
-        "Gift Headway",
-        "Explore Headway for Business",
         "Privacy Policy",
         "Terms of Use",
         "Subscription Terms",
