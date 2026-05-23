@@ -34,7 +34,10 @@ const ReaderView = ({ bookId, onClose }) => {
     const [scale, setScale] = useState(1.0);
     const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
     const [pdfSource, setPdfSource] = useState(null);
+    const [pageWidth, setPageWidth] = useState(600);
     const containerRef = useRef(null);
+    const pageRefs = useRef({});       // pageNumber → DOM node
+    const initialScrollDoneRef = useRef(false);
     const isDesktop = useIsDesktop();
 
     useEffect(() => {
@@ -45,6 +48,19 @@ const ReaderView = ({ bookId, onClose }) => {
         const data = await getBook(bookId);
         setBook(data);
     };
+
+    // Recompute Page width when the container resizes (window resize, drawer toggle, etc).
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const recompute = () => {
+            if (!containerRef.current) return;
+            setPageWidth(Math.min(containerRef.current.offsetWidth - 40, 900));
+        };
+        recompute();
+        const ro = new ResizeObserver(recompute);
+        ro.observe(containerRef.current);
+        return () => ro.disconnect();
+    }, [pdfSource]);
 
     // Cache the PDF blob locally so the reader works offline. On first open
     // we fetch and store; subsequent opens read from IndexedDB.
@@ -72,28 +88,86 @@ const ReaderView = ({ bookId, onClose }) => {
         };
     }, [book?.id, book?.fileUrl]);
 
-    const onDocumentLoadSuccess = async ({ numPages }) => {
-        setNumPages(numPages);
-        if (book && book.totalPages !== numPages) {
-            await updateBookTotalPages(book.id, numPages);
+    const onDocumentLoadSuccess = async ({ numPages: total }) => {
+        setNumPages(total);
+        if (book && book.totalPages !== total) {
+            await updateBookTotalPages(book.id, total);
             if (book.currentPage === 1 && book.status === 'To Read') {
                 await updateBookProgress(book.id, book.currentPage);
             }
         }
     };
 
-    const changePage = async (offset) => {
-        if (!book) return;
-        const newPage = Math.min(Math.max(1, book.currentPage + offset), numPages || 1);
-        setBook((b) => (b ? { ...b, currentPage: newPage } : b));
-        await updateBookProgress(book.id, newPage);
+    // Scroll an arbitrary page into view (used by prev/next + slider).
+    const scrollToPage = (page) => {
+        const target = pageRefs.current[page];
+        const scroller = containerRef.current;
+        if (!target || !scroller) return;
+        const offset = target.offsetTop - scroller.offsetTop;
+        scroller.scrollTo({ top: Math.max(0, offset - 8), behavior: 'smooth' });
     };
 
-    const setPage = async (page) => {
-        const p = Math.max(1, Math.min(page, numPages));
-        setBook((b) => (b ? { ...b, currentPage: p } : b));
-        await updateBookProgress(book.id, p);
+    const changePage = (offset) => {
+        if (!book) return;
+        const next = Math.min(Math.max(1, book.currentPage + offset), numPages || 1);
+        scrollToPage(next);
     };
+
+    const setPage = (page) => {
+        const p = Math.max(1, Math.min(page, numPages || 1));
+        scrollToPage(p);
+    };
+
+    // Restore the last read position once pages are mounted, then attach a
+    // scroll listener that tracks which page is most visible in the viewport.
+    useEffect(() => {
+        if (!numPages || !containerRef.current) return;
+        if (!initialScrollDoneRef.current && book?.currentPage > 1) {
+            // Wait one tick for Page nodes to mount + measure.
+            const t = setTimeout(() => {
+                scrollToPage(book.currentPage);
+                initialScrollDoneRef.current = true;
+            }, 150);
+            return () => clearTimeout(t);
+        }
+        initialScrollDoneRef.current = true;
+    }, [numPages, book?.id]);
+
+    // Track current page from scroll position. Throttled via rAF.
+    useEffect(() => {
+        if (!numPages) return;
+        const scroller = containerRef.current;
+        if (!scroller) return;
+        let pending = false;
+        let lastReported = book?.currentPage || 1;
+        const onScroll = () => {
+            if (pending) return;
+            pending = true;
+            requestAnimationFrame(() => {
+                pending = false;
+                const viewportTop = scroller.scrollTop;
+                const viewportMid = viewportTop + scroller.clientHeight / 3;
+                let best = lastReported;
+                for (let i = 1; i <= numPages; i++) {
+                    const node = pageRefs.current[i];
+                    if (!node) continue;
+                    const top = node.offsetTop - scroller.offsetTop;
+                    const bottom = top + node.offsetHeight;
+                    if (viewportMid >= top && viewportMid < bottom) {
+                        best = i;
+                        break;
+                    }
+                }
+                if (best !== lastReported) {
+                    lastReported = best;
+                    setBook((b) => (b && b.currentPage !== best ? { ...b, currentPage: best } : b));
+                    updateBookProgress(book.id, best);
+                }
+            });
+        };
+        scroller.addEventListener('scroll', onScroll, { passive: true });
+        return () => scroller.removeEventListener('scroll', onScroll);
+    }, [numPages, book?.id]);
 
     if (!book) return <div style={{ padding: '20px' }}>Loading book...</div>;
 
@@ -159,13 +233,26 @@ const ReaderView = ({ bookId, onClose }) => {
                                 loading={<div style={{ color: 'rgba(255,255,255,0.8)' }}>Loading PDF…</div>}
                                 error={<div style={{ color: '#f87171' }}>Failed to load PDF.</div>}
                             >
-                                <Page
-                                    pageNumber={book.currentPage}
-                                    scale={scale}
-                                    renderTextLayer={true}
-                                    renderAnnotationLayer={true}
-                                    width={containerRef.current ? Math.min(containerRef.current.offsetWidth - 40, 800) : 600}
-                                />
+                                <div className="reader-pdf-pages">
+                                    {Array.from({ length: numPages || 0 }, (_, i) => i + 1).map((pageNumber) => (
+                                        <div
+                                            key={pageNumber}
+                                            ref={(node) => {
+                                                if (node) pageRefs.current[pageNumber] = node;
+                                                else delete pageRefs.current[pageNumber];
+                                            }}
+                                            className="reader-pdf-page"
+                                        >
+                                            <Page
+                                                pageNumber={pageNumber}
+                                                scale={scale}
+                                                renderTextLayer
+                                                renderAnnotationLayer
+                                                width={pageWidth}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
                             </Document>
                         ) : (
                             <div style={{ color: 'rgba(255,255,255,0.8)' }}>
@@ -173,55 +260,25 @@ const ReaderView = ({ bookId, onClose }) => {
                             </div>
                         )}
 
-                        <button
-                            type="button"
-                            onClick={() => changePage(-1)}
-                            disabled={book.currentPage <= 1}
-                            style={{
-                                position: 'absolute',
-                                left: 'var(--space-5)',
-                                top: '50%',
-                                transform: 'translateY(-50%)',
-                                width: 48,
-                                height: 48,
-                                borderRadius: '50%',
-                                border: 'none',
-                                background: 'rgba(0,0,0,0.4)',
-                                color: '#fff',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                            }}
-                            aria-label="Previous page"
-                        >
-                            <ChevronLeft size={28} />
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => changePage(1)}
-                            disabled={book.currentPage >= numPages}
-                            style={{
-                                position: 'absolute',
-                                right: 'var(--space-5)',
-                                top: '50%',
-                                transform: 'translateY(-50%)',
-                                width: 48,
-                                height: 48,
-                                borderRadius: '50%',
-                                border: 'none',
-                                background: 'rgba(0,0,0,0.4)',
-                                color: '#fff',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                            }}
-                            aria-label="Next page"
-                        >
-                            <ChevronRight size={28} />
-                        </button>
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => changePage(-1)}
+                        disabled={book.currentPage <= 1}
+                        className="reader-nav-btn reader-nav-prev"
+                        aria-label="Previous page"
+                    >
+                        <ChevronLeft size={28} />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => changePage(1)}
+                        disabled={book.currentPage >= (numPages || 1)}
+                        className="reader-nav-btn reader-nav-next"
+                        aria-label="Next page"
+                    >
+                        <ChevronRight size={28} />
+                    </button>
                 </div>
 
                 <div className="reader-split-divider" aria-hidden />
