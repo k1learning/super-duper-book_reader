@@ -112,14 +112,16 @@ export async function ensureSupabaseSetup() {
   const issues = []
   const { url, anonKey } = getSupabaseConfig()
 
+  const where = process.env.VERCEL ? 'Vercel → Settings → Environment Variables' : '.env.local'
+
   if (!url) {
-    issues.push('NEXT_PUBLIC_SUPABASE_URL is missing. Add it to .env.local.')
+    issues.push(`NEXT_PUBLIC_SUPABASE_URL is missing. Add it in ${where} and redeploy.`)
   } else if (!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(url)) {
     issues.push(`NEXT_PUBLIC_SUPABASE_URL does not look right: "${url}". Expected https://<project>.supabase.co`)
   }
 
   if (!anonKey) {
-    issues.push('NEXT_PUBLIC_SUPABASE_ANON_KEY is missing. Add it to .env.local.')
+    issues.push(`NEXT_PUBLIC_SUPABASE_ANON_KEY is missing. Add it in ${where} and redeploy.`)
   } else if (!looksLikePublishableKey(anonKey)) {
     issues.push(
       'NEXT_PUBLIC_SUPABASE_ANON_KEY does not look valid. Expected either a JWT starting with "eyJ" or a new-format key starting with "sb_publishable_". Copy the publishable/anon key from Supabase → Settings → API Keys.'
